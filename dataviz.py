@@ -415,3 +415,4 @@ def toggle_table(n_clicks, current_style):
 # Run the app
 if __name__ == '__main__':
     app.run(debug=True)
+

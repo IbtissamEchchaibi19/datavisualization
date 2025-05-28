@@ -1,2 +1,5 @@
 .env
 invoices/
+honey_production_reports/
+extracted_data/
+scanned/

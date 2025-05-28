@@ -1,0 +1,2 @@
+invoice_id,invoice_date,customer_name,customer_id,customer_location,customer_type,customer_trn,payment_status,due_date,product,qty,unit_price,total,amount_excl_vat,vat,profit,profit_margin,cost_price,days_to_payment
+,,,,Unknown,,,,,Unknown,,,,,,,,,

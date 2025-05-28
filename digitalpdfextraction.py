@@ -1,15 +1,11 @@
 import os
 import re
 import pandas as pd
-import fitz  # PyMuPDF
-import PyPDF2
-import io
-import json
+import fitz 
 from datetime import datetime
 import glob
 import csv
 import camelot
-import numpy as np
 
 class InvoiceExtractor:
     def __init__(self):
