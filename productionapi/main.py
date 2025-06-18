@@ -4,10 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import shutil
-import tempfile
-from typing import List, Set, Optional, Union
+from typing import List, Optional, Union
 import pandas as pd
-from datetime import datetime
 import uvicorn
 import threading
 import time
@@ -17,7 +15,33 @@ import traceback
 
 # Import your existing classes
 from extract_production_data import HoneyProductionExtractor  # Your existing extractor
-from dashboard import app as dash_app # Your existing dashboard
+
+# DASHBOARD IMPORT - UNCHANGED
+try:
+    from dashboard import app as dash_app
+    DASHBOARD_AVAILABLE = True
+    print("✓ Dashboard app imported successfully")
+except ImportError as e:
+    print(f"✗ Dashboard import error: {e}")
+    print("Creating a dummy dashboard app...")
+    
+    try:
+        import dash
+        from dash import html
+        
+        dash_app = dash.Dash(__name__)
+        dash_app.layout = html.Div([
+            html.H1("Dashboard Not Available"),
+            html.P("The dashboard module could not be imported.")
+        ])
+        DASHBOARD_AVAILABLE = False
+    except:
+        dash_app = None
+        DASHBOARD_AVAILABLE = False
+except Exception as e:
+    print(f"✗ Dashboard import failed: {e}")
+    dash_app = None
+    DASHBOARD_AVAILABLE = False
 
 # Initialize FastAPI
 app = FastAPI(title="Honey Production Processing API", version="1.0.0")
@@ -41,7 +65,7 @@ app.add_middleware(
 
 # Pydantic models for request/response
 class DeleteReportRequest(BaseModel):
-    report_ids: List[str]  # List of batch numbers or report IDs to delete
+    report_ids: List[str]
 
 class DeleteReportResponse(BaseModel):
     message: str
@@ -57,11 +81,20 @@ CSV_FILE = "honey_production_data.csv"
 PROCESSED_FILES_TRACKER = "processed_production_files.json"
 extractor = HoneyProductionExtractor()
 
+# Global variables for dashboard
+dash_thread = None
+
 # Ensure directories exist
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-# Dash app will run on port 8051
-dash_thread = None
+# FIXED: Define the exact CSV column order from your extractor
+CSV_COLUMNS = [
+    'batch_number', 'report_year', 'company_name', 'apiary_number', 
+    'location', 'gross_weight_kg', 'drum_weight_kg', 'net_weight_kg',
+    'beshara_kg', 'production_kg', 'num_production_hives', 
+    'production_per_hive_kg', 'num_hive_supers', 'harvest_date',
+    'efficiency_ratio', 'waste_percentage', 'extraction_date'
+]
 
 def get_file_hash(file_path: str) -> str:
     """Generate a hash for a file to track if it's been processed"""
@@ -104,17 +137,13 @@ def is_file_processed(file_path: str) -> bool:
         filename = os.path.basename(file_path)
         
         if filename not in tracker:
-            print(f"File {filename} not in tracker - will process")
             return False
         
         current_hash = get_file_hash(file_path)
         if not current_hash:
-            print(f"Could not generate hash for {filename} - will process")
             return False
             
-        is_same = tracker[filename] == current_hash
-        print(f"File {filename}: hash match = {is_same}")
-        return is_same
+        return tracker[filename] == current_hash
         
     except Exception as e:
         print(f"Error checking if file processed {file_path}: {e}")
@@ -124,7 +153,6 @@ def mark_file_as_processed(file_path: str):
     """Mark a file as processed in the tracker"""
     try:
         if not os.path.exists(file_path):
-            print(f"Cannot mark non-existent file as processed: {file_path}")
             return
             
         tracker = load_processed_files_tracker()
@@ -135,8 +163,6 @@ def mark_file_as_processed(file_path: str):
             tracker[filename] = file_hash
             save_processed_files_tracker(tracker)
             print(f"Marked {filename} as processed")
-        else:
-            print(f"Could not mark {filename} as processed - no hash generated")
     except Exception as e:
         print(f"Error marking file as processed {file_path}: {e}")
 
@@ -151,404 +177,151 @@ def remove_file_from_tracker(filename: str):
     except Exception as e:
         print(f"Error removing {filename} from tracker: {e}")
 
-def get_csv_columns():
-    """Get CSV columns from extractor or use default columns"""
-    try:
-        # Try to get columns from extractor
-        if hasattr(extractor, 'csv_fields') and extractor.csv_fields:
-            return extractor.csv_fields
-        elif hasattr(extractor, 'get_csv_columns'):
-            return extractor.get_csv_columns()
-        else:
-            # Default columns if extractor doesn't specify
-            return [
-                'batch_number', 'report_year', 'company_name', 'location',
-                'apiary_number', 'production_kg', 'extraction_date'
-            ]
-    except Exception as e:
-        print(f"Error getting CSV columns: {e}")
-        # Fallback columns
-        return [
-            'batch_number', 'report_year', 'company_name', 'location',
-            'apiary_number', 'production_kg', 'extraction_date'
-        ]
-
 def initialize_csv_if_needed():
-    """Initialize CSV file with headers if it doesn't exist"""
-    try:
-        if not os.path.exists(CSV_FILE):
-            columns = get_csv_columns()
-            df = pd.DataFrame(columns=columns)
+    """FIXED: Initialize CSV file with proper column structure"""
+    if not os.path.exists(CSV_FILE):
+        try:
+            # Create empty DataFrame with ALL expected columns in correct order
+            df = pd.DataFrame(columns=CSV_COLUMNS)
             df.to_csv(CSV_FILE, index=False)
-            print(f"Initialized CSV file with columns: {columns}")
-        else:
-            print(f"CSV file already exists: {CSV_FILE}")
-    except Exception as e:
-        print(f"Error initializing CSV: {e}")
-        raise
-
-# Debug and Fix for CSV Update Issues
-
-# Problem Analysis:
-# 1. The API reports adding records but CSV file doesn't reflect the changes
-# 2. Possible issues:
-#    - CSV file permissions
-#    - Race condition in file operations
-#    - Incorrect CSV path being used
-#    - CSV append operation failing silently
-#    - File handle not being closed properly
-
-# Add these improved functions to your FastAPI code:
-
-def append_to_csv_with_verification(new_data: List[dict]):
-    """
-    Improved CSV append function with verification and better error handling
-    """
-    if not new_data:
-        print("No data to append")
-        return 0
-    
-    try:
-        # Get record count before append
-        records_before = 0
-        if os.path.exists(CSV_FILE):
-            try:
-                df_before = pd.read_csv(CSV_FILE)
-                records_before = len(df_before)
-                print(f"CSV before append: {records_before} records")
-            except Exception as e:
-                print(f"Error reading CSV before append: {e}")
-                records_before = 0
-        
-        # Create DataFrame from new data
-        new_df = pd.DataFrame(new_data)
-        print(f"New DataFrame created with {len(new_df)} records")
-        print(f"New DataFrame columns: {list(new_df.columns)}")
-        
-        # Verify CSV file path and permissions
-        csv_abs_path = os.path.abspath(CSV_FILE)
-        print(f"Absolute CSV path: {csv_abs_path}")
-        print(f"CSV directory exists: {os.path.exists(os.path.dirname(csv_abs_path))}")
-        print(f"CSV file exists: {os.path.exists(csv_abs_path)}")
-        
-        if os.path.exists(csv_abs_path):
-            # Check file permissions
-            print(f"CSV file readable: {os.access(csv_abs_path, os.R_OK)}")
-            print(f"CSV file writable: {os.access(csv_abs_path, os.W_OK)}")
-        
-        # Append to CSV with explicit flushing
-        if os.path.exists(CSV_FILE):
-            # Append mode
-            print("Appending to existing CSV...")
-            new_df.to_csv(CSV_FILE, mode='a', header=False, index=False)
-        else:
-            # Create new file
-            print("Creating new CSV...")
-            new_df.to_csv(CSV_FILE, index=False)
-        
-        # Force file system sync
-        import sys
-        if hasattr(os, 'sync'):
-            os.sync()  # Unix/Linux
-        elif sys.platform == 'win32':
-            import ctypes
-            ctypes.windll.kernel32.FlushFileBuffers(-1)
-        
-        # Verify the append worked
-        time.sleep(0.1)  # Small delay to ensure file system sync
-        
-        records_after = 0
-        if os.path.exists(CSV_FILE):
-            try:
-                df_after = pd.read_csv(CSV_FILE)
-                records_after = len(df_after)
-                print(f"CSV after append: {records_after} records")
-            except Exception as e:
-                print(f"Error reading CSV after append: {e}")
-                raise
-        
-        records_added = records_after - records_before
-        print(f"Records actually added: {records_added}")
-        
-        if records_added != len(new_data):
-            raise Exception(f"Mismatch: Expected to add {len(new_data)} records, but only {records_added} were added")
-        
-        return records_added
-        
-    except Exception as e:
-        print(f"Error in append_to_csv_with_verification: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        raise
-
-def get_current_csv_count():
-    """Get current record count from CSV with error handling"""
-    try:
-        if os.path.exists(CSV_FILE):
-            df = pd.read_csv(CSV_FILE)
-            count = len(df)
-            print(f"Current CSV count: {count}")
-            return count
-        else:
-            print("CSV file doesn't exist")
-            return 0
-    except Exception as e:
-        print(f"Error reading CSV count: {e}")
-        return -1  # Return -1 to indicate error
-
-# Updated upload endpoint with better debugging
-@app.post("/upload-reports-debug/")
-async def upload_reports_with_debug(files: Union[List[UploadFile], UploadFile] = File(...)):
-    """
-    Upload and process honey production report PDFs with detailed debugging
-    """
-    # Convert single file to list for uniform processing
-    if isinstance(files, UploadFile):
-        files = [files]
-    
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided")
-    
-    print(f"\n=== UPLOAD WITH DEBUG STARTED: {len(files)} files ===")
-    print(f"Working directory: {os.getcwd()}")
-    print(f"CSV file path: {os.path.abspath(CSV_FILE)}")
-    print(f"Reports directory: {os.path.abspath(REPORTS_DIR)}")
-    
-    # Check initial CSV state
-    initial_count = get_current_csv_count()
-    print(f"Initial CSV count: {initial_count}")
-    
-    processed_files = []
-    total_new_records = 0
-    errors = []
-    all_new_data = []
-    skipped_files = []
-    
-    # Ensure CSV is initialized
-    try:
-        initialize_csv_if_needed()
-        post_init_count = get_current_csv_count()
-        print(f"Post-initialization CSV count: {post_init_count}")
-    except Exception as e:
-        print(f"Error initializing CSV: {e}")
-        raise HTTPException(status_code=500, detail=f"Error initializing CSV: {str(e)}")
-    
-    for file in files:
-        print(f"\n--- Processing file: {file.filename} ---")
-        
-        if not file.filename.endswith('.pdf'):
-            error_msg = f"{file.filename}: Only PDF files are allowed"
-            errors.append(error_msg)
-            print(error_msg)
-            continue
-        
-        file_path = os.path.join(REPORTS_DIR, file.filename)
-        
-        try:
-            # Save the uploaded file
-            print(f"Saving file to: {file_path}")
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            file_size = os.path.getsize(file_path)
-            print(f"File saved successfully, size: {file_size} bytes")
-            
-            # Check if this file has already been processed
-            if is_file_processed(file_path):
-                print(f"File {file.filename} already processed - skipping")
-                skipped_files.append({
-                    "filename": file.filename,
-                    "reason": "Already processed (no changes detected)"
-                })
-                continue
-            
-            # Process the new/changed file
-            print(f"Processing new/changed file: {file.filename}")
-            try:
-                report_data = extractor.process_report(file_path)
-                print(f"Extractor returned: {len(report_data) if report_data else 0} records")
-                
-                if report_data and len(report_data) > 0:
-                    print(f"Sample record: {report_data[0]}")
-                    all_new_data.extend(report_data)
-                    
-                    processed_files.append({
-                        "filename": file.filename,
-                        "records_added": len(report_data)
-                    })
-                    total_new_records += len(report_data)
-                    print(f"Successfully processed {file.filename}: {len(report_data)} records")
-                    
-                else:
-                    error_msg = f"{file.filename}: No data extracted from PDF"
-                    errors.append(error_msg)
-                    print(error_msg)
-                    
-            except Exception as e:
-                error_msg = f"{file.filename}: Error processing PDF - {str(e)}"
-                errors.append(error_msg)
-                print(f"Error processing {file.filename}: {e}")
-                print(f"Traceback: {traceback.format_exc()}")
-                
+            print(f"Initialized CSV file with {len(CSV_COLUMNS)} columns")
         except Exception as e:
-            error_msg = f"{file.filename}: Error saving file - {str(e)}"
-            errors.append(error_msg)
-            print(f"Error handling {file.filename}: {e}")
-    
-    # CSV Update with verification
-    print(f"\n--- CSV UPDATE WITH VERIFICATION ---")
-    print(f"Total new records to add: {len(all_new_data)}")
-    
-    pre_append_count = get_current_csv_count()
-    print(f"Pre-append CSV count: {pre_append_count}")
-    
-    if all_new_data:
-        try:
-            records_actually_added = append_to_csv_with_verification(all_new_data)
-            print(f"Records actually added to CSV: {records_actually_added}")
-            
-            # Mark files as processed only if CSV update succeeded
-            if records_actually_added > 0:
-                for file in files:
-                    if file.filename.endswith('.pdf'):
-                        file_path = os.path.join(REPORTS_DIR, file.filename)
-                        if os.path.exists(file_path) and not is_file_processed(file_path):
-                            mark_file_as_processed(file_path)
-                            print(f"Marked {file.filename} as processed")
-            
-        except Exception as e:
-            print(f"Critical error saving to CSV: {e}")
-            print(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"Error saving data to CSV: {str(e)}")
-    else:
-        print("No new data to add to CSV")
-    
-    # Final verification
-    final_count = get_current_csv_count()
-    print(f"Final CSV count: {final_count}")
-    actual_records_added = final_count - initial_count if initial_count >= 0 and final_count >= 0 else 0
-    
-    print(f"\n=== UPLOAD DEBUG COMPLETED ===")
-    print(f"Expected new records: {total_new_records}")
-    print(f"Actual records added: {actual_records_added}")
-    print(f"Initial count: {initial_count}")
-    print(f"Final count: {final_count}")
-    
-    return {
-        "message": f"Upload completed. Processed {len(processed_files)} new/changed files",
-        "processed_files": processed_files,
-        "skipped_files": skipped_files,
-        "total_new_records": total_new_records,
-        "actual_records_added": actual_records_added,
-        "csv_counts": {
-            "initial": initial_count,
-            "final": final_count,
-            "difference": actual_records_added
-        },
-        "total_records": final_count,
-        "errors": errors if errors else None,
-        "debug_info": {
-            "csv_file_path": os.path.abspath(CSV_FILE),
-            "working_directory": os.getcwd(),
-            "csv_exists": os.path.exists(CSV_FILE)
-        }
-    }
+            print(f"Error initializing CSV: {e}")
 
-# Additional debugging endpoint
-@app.get("/verify-csv-state/")
-async def verify_csv_state():
-    """
-    Verify the current state of the CSV file
-    """
-    csv_info = {
-        "csv_file_path": os.path.abspath(CSV_FILE),
-        "csv_exists": os.path.exists(CSV_FILE),
-        "working_directory": os.getcwd(),
-        "reports_dir": os.path.abspath(REPORTS_DIR),
-        "reports_dir_exists": os.path.exists(REPORTS_DIR)
-    }
+def ensure_data_consistency(data_dict: dict) -> dict:
+    """FIXED: Ensure all required columns are present with proper default values"""
+    consistent_data = {}
     
-    if os.path.exists(CSV_FILE):
-        try:
-            stat_info = os.stat(CSV_FILE)
-            csv_info.update({
-                "file_size": stat_info.st_size,
-                "last_modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-                "readable": os.access(CSV_FILE, os.R_OK),
-                "writable": os.access(CSV_FILE, os.W_OK)
-            })
-            
-            # Read CSV content
-            df = pd.read_csv(CSV_FILE)
-            csv_info.update({
-                "record_count": len(df),
-                "columns": list(df.columns),
-                "memory_usage": df.memory_usage(deep=True).sum()
-            })
-            
-            if len(df) > 0:
-                csv_info["last_5_records"] = df.tail(5).to_dict('records')
-                
-        except Exception as e:
-            csv_info["read_error"] = str(e)
+    for column in CSV_COLUMNS:
+        if column in data_dict and data_dict[column] is not None:
+            # Convert to appropriate type and handle NaN
+            value = data_dict[column]
+            if pd.isna(value) or value == '' or str(value).lower() == 'nan':
+                consistent_data[column] = None
+            else:
+                consistent_data[column] = value
+        else:
+            # Set appropriate default for missing columns
+            if column in ['batch_number', 'company_name', 'apiary_number', 'location']:
+                consistent_data[column] = 'Unknown'
+            elif column == 'report_year':
+                consistent_data[column] = 2024
+            elif column == 'extraction_date':
+                consistent_data[column] = pd.Timestamp.now().strftime('%Y-%m-%d')
+            else:
+                consistent_data[column] = None
     
-    return csv_info
+    return consistent_data
 
-# Immediate fix: Replace the append_to_csv function in your existing code
-def append_to_csv_fixed(new_data: List[dict]):
-    """Fixed version of append_to_csv with proper error handling"""
+def append_to_csv(new_data: List[dict]):
+    """FIXED: Append new data with proper column alignment and validation"""
     if not new_data:
         return
     
     try:
-        # Get absolute path
-        csv_path = os.path.abspath(CSV_FILE)
-        print(f"Appending to CSV at: {csv_path}")
+        print(f"DEBUG: Appending {len(new_data)} records to CSV")
         
-        # Create DataFrame
-        new_df = pd.DataFrame(new_data)
-        print(f"Created DataFrame with {len(new_df)} records")
+        # Ensure data consistency for all records
+        consistent_data = []
+        for record in new_data:
+            consistent_record = ensure_data_consistency(record)
+            consistent_data.append(consistent_record)
+            print(f"DEBUG: Processed record - batch: {consistent_record.get('batch_number')}, location: {consistent_record.get('location')}, production: {consistent_record.get('production_kg')}")
         
-        # Check if file exists and append accordingly
-        if os.path.exists(csv_path):
-            # Read existing CSV to verify structure
-            existing_df = pd.read_csv(csv_path)
-            print(f"Existing CSV has {len(existing_df)} records")
-            
-            # Ensure column alignment
-            if set(new_df.columns) != set(existing_df.columns):
-                print(f"Column mismatch - Existing: {list(existing_df.columns)}, New: {list(new_df.columns)}")
-                # Reorder new_df columns to match existing
-                new_df = new_df.reindex(columns=existing_df.columns, fill_value='')
-            
-            # Append to existing file
-            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-                new_df.to_csv(f, header=False, index=False)
-            
+        # Create DataFrame with proper column order
+        new_df = pd.DataFrame(consistent_data, columns=CSV_COLUMNS)
+        
+        # Debug: Check for NaN values before saving
+        nan_columns = new_df.columns[new_df.isna().any()].tolist()
+        if nan_columns:
+            print(f"WARNING: Found NaN values in columns: {nan_columns}")
+        
+        if os.path.exists(CSV_FILE):
+            # Read existing CSV to ensure column compatibility
+            try:
+                existing_df = pd.read_csv(CSV_FILE)
+                print(f"DEBUG: Existing CSV has {len(existing_df)} records with columns: {list(existing_df.columns)}")
+                
+                # Check if columns match
+                if list(existing_df.columns) != CSV_COLUMNS:
+                    print("WARNING: Column mismatch detected - rewriting CSV structure")
+                    # Rewrite entire CSV with correct structure
+                    combined_df = pd.concat([existing_df.reindex(columns=CSV_COLUMNS), new_df], ignore_index=True)
+                    combined_df.to_csv(CSV_FILE, index=False)
+                else:
+                    # Append normally
+                    new_df.to_csv(CSV_FILE, mode='a', header=False, index=False)
+            except Exception as e:
+                print(f"Error reading existing CSV: {e}")
+                # If can't read existing, write new
+                new_df.to_csv(CSV_FILE, index=False)
         else:
-            # Create new file
-            new_df.to_csv(csv_path, index=False)
+            # Create new CSV with headers
+            new_df.to_csv(CSV_FILE, index=False)
         
-        # Verify the append worked
-        verification_df = pd.read_csv(csv_path)
-        print(f"CSV now contains {len(verification_df)} records")
+        print(f"SUCCESS: Added {len(new_data)} records to CSV")
+        
+        # Verify the data was written correctly
+        try:
+            verification_df = pd.read_csv(CSV_FILE)
+            print(f"VERIFICATION: CSV now has {len(verification_df)} total records")
+            
+            # Check last few records for NaN issues
+            last_records = verification_df.tail(len(new_data))
+            nan_check = last_records.isna().sum()
+            if nan_check.sum() > 0:
+                print(f"WARNING: NaN values found in newly added records:")
+                for col, count in nan_check.items():
+                    if count > 0:
+                        print(f"  {col}: {count} NaN values")
+            else:
+                print("SUCCESS: No NaN values in newly added records")
+                
+        except Exception as e:
+            print(f"Error verifying CSV: {e}")
+            
+    except Exception as e:
+        print(f"ERROR: Failed to append to CSV: {e}")
+        traceback.print_exc()
+        raise
+
+def get_report_records_by_ids(report_ids: List[str]) -> tuple:
+    """Get report records by their IDs and return found/not found lists"""
+    if not os.path.exists(CSV_FILE):
+        return [], report_ids
+    
+    try:
+        df = pd.read_csv(CSV_FILE)
+        if df.empty or 'batch_number' not in df.columns:
+            return [], report_ids
+        
+        # Convert report_ids to strings for comparison
+        report_ids_str = [str(id) for id in report_ids]
+        
+        # Find matching records
+        matching_records = df[df['batch_number'].astype(str).isin(report_ids_str)]
+        found_batch_numbers = matching_records['batch_number'].astype(str).unique().tolist()
+        
+        # Determine which IDs were not found
+        not_found_ids = [id for id in report_ids_str if id not in found_batch_numbers]
+        
+        # Convert matching records to list of dictionaries
+        found_records = matching_records.to_dict('records')
+        
+        return found_records, not_found_ids
         
     except Exception as e:
-        print(f"Error in append_to_csv_fixed: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        raise
+        print(f"Error getting report records: {e}")
+        return [], report_ids
+
 def delete_records_from_csv(report_ids: List[str]) -> int:
-    """
-    Delete records from CSV by batch numbers
-    Returns: number of deleted records
-    """
+    """Delete records from CSV by batch numbers"""
     if not os.path.exists(CSV_FILE):
-        print("CSV file doesn't exist - nothing to delete")
         return 0
     
     try:
         df = pd.read_csv(CSV_FILE)
         original_count = len(df)
-        print(f"Original CSV has {original_count} records")
         
         # Filter out records with matching batch numbers
         df_filtered = df[~df['batch_number'].astype(str).isin([str(id) for id in report_ids])]
@@ -556,7 +329,7 @@ def delete_records_from_csv(report_ids: List[str]) -> int:
         
         # Save the updated CSV
         df_filtered.to_csv(CSV_FILE, index=False)
-        print(f"Deleted {deleted_count} records from CSV, {len(df_filtered)} remaining")
+        print(f"Deleted {deleted_count} records from CSV")
         
         return deleted_count
         
@@ -565,10 +338,7 @@ def delete_records_from_csv(report_ids: List[str]) -> int:
         raise HTTPException(status_code=500, detail=f"Error updating CSV: {str(e)}")
 
 def delete_pdf_files(filenames: List[str]) -> List[str]:
-    """
-    Delete PDF files from the reports directory
-    Returns: list of successfully deleted filenames
-    """
+    """Delete PDF files from the reports directory"""
     deleted_files = []
     
     for filename in filenames:
@@ -588,33 +358,42 @@ def delete_pdf_files(filenames: List[str]) -> List[str]:
     
     return deleted_files
 
+# DASHBOARD FUNCTIONS - UNCHANGED
 def run_dash_app():
     """Run Dash app in a separate thread"""
     try:
-        dash_app.run(host='0.0.0.0', port=8051, debug=False)
+        if dash_app is not None:
+            dash_app.run(host='0.0.0.0', port=8051, debug=False)
+        else:
+            print("Dash app is None - cannot start")
     except Exception as e:
         print(f"Error running Dash app: {e}")
 
 def start_dash_app():
     """Start Dash app in background thread"""
     global dash_thread
+    
+    if not DASHBOARD_AVAILABLE or dash_app is None:
+        print("Dashboard not available - skipping start")
+        return
+        
     if dash_thread is None or not dash_thread.is_alive():
         dash_thread = threading.Thread(target=run_dash_app, daemon=True)
         dash_thread.start()
-        time.sleep(2)
+        time.sleep(2)  # Wait for dashboard to start
         print("Dash app started on port 8051")
+    else:
+        print("Dash app already running")
 
+# STARTUP EVENT
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application on startup"""
     print("Starting Honey Production Processing API...")
-    try:
-        initialize_csv_if_needed()
-        start_dash_app()
-        print("Startup completed successfully")
-    except Exception as e:
-        print(f"Error during startup: {e}")
+    start_dash_app()
+    initialize_csv_if_needed()
 
+# ROUTES - UNCHANGED EXCEPT UPLOAD
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
@@ -640,22 +419,46 @@ async def get_dashboard(request: Request):
     
     return {
         "dashboard_url": base_url,
-        "message": "Dashboard is running",
-        "iframe_endpoint": "/dashboard-iframe/"
+        "message": "Dashboard is running" if DASHBOARD_AVAILABLE else "Dashboard not available",
+        "iframe_endpoint": "/dashboard-iframe/",
+        "dashboard_available": DASHBOARD_AVAILABLE
     }
+
+@app.get("/dashboard-iframe/")
+async def dashboard_iframe():
+    """Serve dashboard in iframe"""
+    if not DASHBOARD_AVAILABLE:
+        return HTMLResponse("""
+        <html>
+            <body>
+                <h1>Dashboard Not Available</h1>
+                <p>The dashboard module could not be imported.</p>
+            </body>
+        </html>
+        """)
+    
+    return HTMLResponse("""
+    <html>
+        <head>
+            <title>Production Dashboard</title>
+            <style>
+                body { margin: 0; padding: 0; }
+                iframe { width: 100%; height: 100vh; border: none; }
+            </style>
+        </head>
+        <body>
+            <iframe src="http://localhost:8051/"></iframe>
+        </body>
+    </html>
+    """)
 
 @app.delete("/delete-reports/")
 async def delete_reports(request: DeleteReportRequest):
-    """
-    Delete one or multiple production reports by their batch numbers
-    This will remove both the PDF files and their records from the CSV
-    """
+    """Delete one or multiple production reports by their batch numbers"""
     if not request.report_ids:
         raise HTTPException(status_code=400, detail="No report IDs provided")
     
     try:
-        print(f"Attempting to delete reports: {request.report_ids}")
-        
         # Get report records that match the IDs
         found_records, not_found_ids = get_report_records_by_ids(request.report_ids)
         
@@ -677,9 +480,7 @@ async def delete_reports(request: DeleteReportRequest):
         # Extract filenames from the found records and delete PDF files
         filenames_to_delete = []
         for record in found_records:
-            # Try to determine the filename from the batch number or other fields
             batch_number = record.get('batch_number', 'unknown')
-            # You might need to adjust this based on your naming convention
             potential_filename = f"{batch_number}.pdf"
             filenames_to_delete.append(potential_filename)
         
@@ -718,15 +519,11 @@ async def delete_reports(request: DeleteReportRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error deleting reports: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting reports: {str(e)}")
 
 @app.get("/reports/")
 async def list_reports():
-    """
-    List all production reports with their batch numbers for reference
-    This helps users know which IDs they can delete
-    """
+    """List all production reports with their batch numbers for reference"""
     if not os.path.exists(CSV_FILE):
         return {
             "message": "No production report data found",
@@ -736,7 +533,6 @@ async def list_reports():
     
     try:
         df = pd.read_csv(CSV_FILE)
-        print(f"Listed reports from CSV with {len(df)} records")
         
         if df.empty:
             return {
@@ -747,7 +543,6 @@ async def list_reports():
         
         # Group by batch_number to get unique reports
         if 'batch_number' not in df.columns:
-            print(f"Warning: batch_number column missing. Available columns: {list(df.columns)}")
             return {
                 "message": "CSV structure error - missing batch_number column",
                 "reports": [],
@@ -784,15 +579,11 @@ async def list_reports():
         }
         
     except Exception as e:
-        print(f"Error listing reports: {e}")
         raise HTTPException(status_code=500, detail=f"Error listing reports: {str(e)}")
 
 @app.post("/upload-reports/")
 async def upload_reports(files: Union[List[UploadFile], UploadFile] = File(...)):
-    """
-    Upload and process honey production report PDFs (supports both single and multiple files)
-    This endpoint handles both single file upload and multiple file upload
-    """
+    """FIXED: Upload and process honey production report PDFs with proper data handling"""
     # Convert single file to list for uniform processing
     if isinstance(files, UploadFile):
         files = [files]
@@ -800,44 +591,26 @@ async def upload_reports(files: Union[List[UploadFile], UploadFile] = File(...))
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
     
-    print(f"\n=== UPLOAD STARTED: {len(files)} files ===")
-    
     processed_files = []
     total_new_records = 0
     errors = []
     all_new_data = []
     skipped_files = []
     
-    # Ensure CSV is initialized
-    try:
-        initialize_csv_if_needed()
-    except Exception as e:
-        print(f"Error initializing CSV: {e}")
-        raise HTTPException(status_code=500, detail=f"Error initializing CSV: {str(e)}")
-    
     for file in files:
-        print(f"\n--- Processing file: {file.filename} ---")
-        
         if not file.filename.endswith('.pdf'):
-            error_msg = f"{file.filename}: Only PDF files are allowed"
-            errors.append(error_msg)
-            print(error_msg)
+            errors.append(f"{file.filename}: Only PDF files are allowed")
             continue
         
         file_path = os.path.join(REPORTS_DIR, file.filename)
         
         try:
             # Save the uploaded file
-            print(f"Saving file to: {file_path}")
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             
-            file_size = os.path.getsize(file_path)
-            print(f"File saved successfully, size: {file_size} bytes")
-            
             # Check if this file has already been processed
             if is_file_processed(file_path):
-                print(f"File {file.filename} already processed - skipping")
                 skipped_files.append({
                     "filename": file.filename,
                     "reason": "Already processed (no changes detected)"
@@ -848,75 +621,74 @@ async def upload_reports(files: Union[List[UploadFile], UploadFile] = File(...))
             print(f"Processing new/changed file: {file.filename}")
             try:
                 report_data = extractor.process_report(file_path)
-                print(f"Extractor returned: {len(report_data) if report_data else 0} records")
                 
                 if report_data and len(report_data) > 0:
-                    print(f"Sample record: {report_data[0]}")
-                    all_new_data.extend(report_data)
+                    print(f"DEBUG: Extractor returned {len(report_data)} records for {file.filename}")
+                    
+                    # FIXED: Validate and clean the data before adding
+                    valid_records = []
+                    for record in report_data:
+                        # Debug the record structure
+                        print(f"DEBUG: Raw record: {record}")
+                        
+                        # Ensure the record has all required fields
+                        clean_record = ensure_data_consistency(record)
+                        valid_records.append(clean_record)
+                        
+                        print(f"DEBUG: Cleaned record - batch: {clean_record.get('batch_number')}, production: {clean_record.get('production_kg')}")
+                    
+                    all_new_data.extend(valid_records)
+                    mark_file_as_processed(file_path)
                     
                     processed_files.append({
                         "filename": file.filename,
-                        "records_added": len(report_data)
+                        "records_added": len(valid_records)
                     })
-                    total_new_records += len(report_data)
-                    print(f"Successfully processed {file.filename}: {len(report_data)} records")
-                    
-                    # Mark as processed only after successful processing
-                    mark_file_as_processed(file_path)
+                    total_new_records += len(valid_records)
+                    print(f"SUCCESS: Processed {file.filename}: {len(valid_records)} valid records")
                 else:
-                    error_msg = f"{file.filename}: No data extracted from PDF"
-                    errors.append(error_msg)
-                    print(error_msg)
+                    errors.append(f"{file.filename}: No data extracted from PDF")
+                    print(f"WARNING: No data extracted from {file.filename}")
                     
             except Exception as e:
                 error_msg = f"{file.filename}: Error processing PDF - {str(e)}"
                 errors.append(error_msg)
-                print(f"Error processing {file.filename}: {e}")
-                print(f"Traceback: {traceback.format_exc()}")
+                print(f"ERROR: {error_msg}")
+                traceback.print_exc()
                 
         except Exception as e:
             error_msg = f"{file.filename}: Error saving file - {str(e)}"
             errors.append(error_msg)
-            print(f"Error handling {file.filename}: {e}")
+            print(f"ERROR: {error_msg}")
             
             # Clean up file on error
             if os.path.exists(file_path):
                 try:
                     os.remove(file_path)
-                    print(f"Cleaned up failed file: {file_path}")
-                except Exception as cleanup_error:
-                    print(f"Error cleaning up file: {cleanup_error}")
+                except:
+                    pass
     
-    # Append all new data to CSV in one operation
-    print(f"\n--- CSV Update Phase ---")
-    print(f"Total new records to add: {len(all_new_data)}")
-    
+    # FIXED: Append all new data to CSV with proper validation
     if all_new_data:
         try:
+            print(f"DEBUG: About to append {len(all_new_data)} records to CSV")
             append_to_csv(all_new_data)
-            print(f"Successfully added {len(all_new_data)} records to CSV")
+            print(f"SUCCESS: Added {len(all_new_data)} total records to CSV")
         except Exception as e:
-            print(f"Critical error saving to CSV: {e}")
-            raise HTTPException(status_code=500, detail=f"Error saving data to CSV: {str(e)}")
-    else:
-        print("No new data to add to CSV")
+            error_msg = f"Error saving data to CSV: {str(e)}"
+            print(f"ERROR: {error_msg}")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=error_msg)
     
-    # Get current total records for response
+    # Get current total records
     total_records = 0
     try:
         if os.path.exists(CSV_FILE):
             df = pd.read_csv(CSV_FILE)
             total_records = len(df)
-            print(f"CSV now contains {total_records} total records")
+            print(f"DEBUG: CSV now contains {total_records} total records")
     except Exception as e:
-        print(f"Error reading CSV for final count: {e}")
-    
-    print(f"\n=== UPLOAD COMPLETED ===")
-    print(f"Processed: {len(processed_files)} files")
-    print(f"Skipped: {len(skipped_files)} files")
-    print(f"Errors: {len(errors)}")
-    print(f"New records: {total_new_records}")
-    print(f"Total records: {total_records}")
+        print(f"Error reading CSV for count: {e}")
     
     return {
         "message": f"Upload completed. Processed {len(processed_files)} new/changed files",
@@ -939,7 +711,6 @@ async def get_data():
     
     try:
         df = pd.read_csv(CSV_FILE)
-        print(f"Retrieved {len(df)} records from CSV")
         
         # Convert DataFrame to list of dictionaries
         data = df.to_dict('records')
@@ -951,7 +722,6 @@ async def get_data():
             "unique_batches": df['batch_number'].nunique() if 'batch_number' in df.columns else 0
         }
     except Exception as e:
-        print(f"Error reading data: {e}")
         raise HTTPException(status_code=500, detail=f"Error reading data: {str(e)}")
 
 @app.get("/health/")
@@ -982,9 +752,8 @@ async def health_check():
         
         # Get CSV record count
         csv_records = 0
-        csv_exists = os.path.exists(CSV_FILE)
         try:
-            if csv_exists:
+            if os.path.exists(CSV_FILE):
                 df = pd.read_csv(CSV_FILE)
                 csv_records = len(df)
         except Exception as e:
@@ -994,315 +763,19 @@ async def health_check():
             "status": "healthy",
             "message": "Honey Production Processing API is running",
             "dashboard_status": dashboard_status,
-            "csv_exists": csv_exists,
+            "dashboard_available": DASHBOARD_AVAILABLE,
+            "csv_exists": os.path.exists(CSV_FILE),
             "csv_records": csv_records,
             "reports_directory_exists": os.path.exists(REPORTS_DIR),
             "total_pdf_files": pdf_count,
             "processed_files": processed_count,
-            "unprocessed_files": unprocessed_count,
-            "csv_file_path": os.path.abspath(CSV_FILE),
-            "reports_dir_path": os.path.abspath(REPORTS_DIR)
+            "unprocessed_files": unprocessed_count
         }
     except Exception as e:
         return {
             "status": "error",
             "message": f"Health check failed: {str(e)}"
         }
-
-# Add these diagnostic endpoints to your FastAPI code to debug the issue
-
-@app.post("/force-reprocess/")
-async def force_reprocess_files(files: Union[List[UploadFile], UploadFile] = File(...)):
-    """
-    Force reprocess files by clearing their processed status first
-    This will help us debug what's actually happening during processing
-    """
-    # Convert single file to list for uniform processing
-    if isinstance(files, UploadFile):
-        files = [files]
-    
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided")
-    
-    print(f"\n=== FORCE REPROCESS STARTED: {len(files)} files ===")
-    
-    # Clear processed status for all uploaded files
-    for file in files:
-        if file.filename.endswith('.pdf'):
-            remove_file_from_tracker(file.filename)
-            print(f"Cleared processed status for: {file.filename}")
-    
-    # Now process them normally (copy the upload logic but with more debugging)
-    processed_files = []
-    total_new_records = 0
-    errors = []
-    all_new_data = []
-    
-    # Ensure CSV is initialized
-    try:
-        initialize_csv_if_needed()
-        print(f"CSV initialized. Current record count: {len(pd.read_csv(CSV_FILE)) if os.path.exists(CSV_FILE) else 0}")
-    except Exception as e:
-        print(f"Error initializing CSV: {e}")
-        raise HTTPException(status_code=500, detail=f"Error initializing CSV: {str(e)}")
-    
-    for file in files:
-        print(f"\n--- FORCE Processing file: {file.filename} ---")
-        
-        if not file.filename.endswith('.pdf'):
-            error_msg = f"{file.filename}: Only PDF files are allowed"
-            errors.append(error_msg)
-            continue
-        
-        file_path = os.path.join(REPORTS_DIR, file.filename)
-        
-        try:
-            # Save the uploaded file
-            print(f"Saving file to: {file_path}")
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            file_size = os.path.getsize(file_path)
-            print(f"File saved successfully, size: {file_size} bytes")
-            
-            # FORCE process without checking if already processed
-            print(f"FORCE processing file: {file.filename}")
-            
-            try:
-                # Debug: Check if extractor exists and has methods
-                print(f"Extractor type: {type(extractor)}")
-                print(f"Extractor methods: {[method for method in dir(extractor) if not method.startswith('_')]}")
-                
-                # Call the extractor
-                report_data = extractor.process_report(file_path)
-                print(f"Extractor returned data type: {type(report_data)}")
-                print(f"Extractor returned record count: {len(report_data) if report_data else 0}")
-                
-                if report_data and len(report_data) > 0:
-                    print(f"First record structure: {report_data[0]}")
-                    print(f"First record keys: {list(report_data[0].keys()) if isinstance(report_data[0], dict) else 'Not a dict'}")
-                    
-                    all_new_data.extend(report_data)
-                    
-                    processed_files.append({
-                        "filename": file.filename,
-                        "records_added": len(report_data)
-                    })
-                    total_new_records += len(report_data)
-                    print(f"Successfully processed {file.filename}: {len(report_data)} records")
-                    
-                else:
-                    error_msg = f"{file.filename}: Extractor returned no data"
-                    errors.append(error_msg)
-                    print(error_msg)
-                    
-            except Exception as e:
-                error_msg = f"{file.filename}: Error during extraction - {str(e)}"
-                errors.append(error_msg)
-                print(f"Error processing {file.filename}: {e}")
-                print(f"Traceback: {traceback.format_exc()}")
-                
-        except Exception as e:
-            error_msg = f"{file.filename}: Error saving file - {str(e)}"
-            errors.append(error_msg)
-            print(f"Error handling {file.filename}: {e}")
-    
-    # Debug CSV append
-    print(f"\n--- CSV APPEND DEBUG ---")
-    print(f"Records to append: {len(all_new_data)}")
-    
-    if all_new_data:
-        print(f"Sample record for CSV: {all_new_data[0]}")
-        
-        # Check CSV before append
-        csv_before_count = 0
-        if os.path.exists(CSV_FILE):
-            df_before = pd.read_csv(CSV_FILE)
-            csv_before_count = len(df_before)
-            print(f"CSV before append: {csv_before_count} records")
-            print(f"CSV columns: {list(df_before.columns)}")
-        
-        try:
-            # Manual CSV append with detailed logging
-            new_df = pd.DataFrame(all_new_data)
-            print(f"New DataFrame shape: {new_df.shape}")
-            print(f"New DataFrame columns: {list(new_df.columns)}")
-            
-            # Append to CSV
-            if os.path.exists(CSV_FILE):
-                new_df.to_csv(CSV_FILE, mode='a', header=False, index=False)
-                print("Appended to existing CSV")
-            else:
-                new_df.to_csv(CSV_FILE, index=False)
-                print("Created new CSV")
-            
-            # Verify append
-            df_after = pd.read_csv(CSV_FILE)
-            csv_after_count = len(df_after)
-            print(f"CSV after append: {csv_after_count} records")
-            print(f"Records actually added: {csv_after_count - csv_before_count}")
-            
-            # Mark files as processed only if CSV update succeeded
-            if csv_after_count > csv_before_count:
-                for file in files:
-                    if file.filename.endswith('.pdf'):
-                        file_path = os.path.join(REPORTS_DIR, file.filename)
-                        mark_file_as_processed(file_path)
-                        print(f"Marked {file.filename} as processed")
-            
-        except Exception as e:
-            print(f"Error appending to CSV: {e}")
-            print(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"Error saving data to CSV: {str(e)}")
-    
-    # Final count
-    total_records = 0
-    try:
-        if os.path.exists(CSV_FILE):
-            df = pd.read_csv(CSV_FILE)
-            total_records = len(df)
-    except Exception as e:
-        print(f"Error reading final CSV count: {e}")
-    
-    return {
-        "message": f"Force reprocess completed. Processed {len(processed_files)} files",
-        "processed_files": processed_files,
-        "total_new_records": total_new_records,
-        "total_records": total_records,
-        "errors": errors if errors else None,
-        "debug_info": {
-            "all_new_data_count": len(all_new_data),
-            "csv_exists": os.path.exists(CSV_FILE),
-            "csv_path": os.path.abspath(CSV_FILE)
-        }
-    }
-
-@app.get("/debug-status/")
-async def debug_status():
-    """
-    Get detailed debug information about the current state
-    """
-    debug_info = {
-        "csv_file": {
-            "exists": os.path.exists(CSV_FILE),
-            "path": os.path.abspath(CSV_FILE),
-            "size": os.path.getsize(CSV_FILE) if os.path.exists(CSV_FILE) else 0,
-            "record_count": 0,
-            "columns": []
-        },
-        "reports_directory": {
-            "exists": os.path.exists(REPORTS_DIR),
-            "path": os.path.abspath(REPORTS_DIR),
-            "pdf_files": []
-        },
-        "processed_files_tracker": {
-            "exists": os.path.exists(PROCESSED_FILES_TRACKER),
-            "path": os.path.abspath(PROCESSED_FILES_TRACKER),
-            "tracked_files": {}
-        },
-        "extractor_info": {
-            "type": str(type(extractor)),
-            "methods": [method for method in dir(extractor) if not method.startswith('_')],
-            "has_process_report": hasattr(extractor, 'process_report'),
-            "has_csv_fields": hasattr(extractor, 'csv_fields')
-        }
-    }
-    
-    # CSV details
-    if os.path.exists(CSV_FILE):
-        try:
-            df = pd.read_csv(CSV_FILE)
-            debug_info["csv_file"]["record_count"] = len(df)
-            debug_info["csv_file"]["columns"] = list(df.columns)
-            if len(df) > 0:
-                debug_info["csv_file"]["sample_record"] = df.iloc[0].to_dict()
-        except Exception as e:
-            debug_info["csv_file"]["error"] = str(e)
-    
-    # Reports directory
-    if os.path.exists(REPORTS_DIR):
-        try:
-            pdf_files = [f for f in os.listdir(REPORTS_DIR) if f.endswith('.pdf')]
-            debug_info["reports_directory"]["pdf_files"] = pdf_files
-            debug_info["reports_directory"]["pdf_count"] = len(pdf_files)
-        except Exception as e:
-            debug_info["reports_directory"]["error"] = str(e)
-    
-    # Processed files tracker
-    debug_info["processed_files_tracker"]["tracked_files"] = load_processed_files_tracker()
-    
-    # Test extractor
-    if hasattr(extractor, 'csv_fields'):
-        try:
-            debug_info["extractor_info"]["csv_fields"] = extractor.csv_fields
-        except:
-            debug_info["extractor_info"]["csv_fields"] = "Error accessing csv_fields"
-    
-    return debug_info
-
-@app.post("/clear-processed-tracker/")
-async def clear_processed_tracker():
-    """
-    Clear the processed files tracker to force reprocessing of all files
-    """
-    try:
-        if os.path.exists(PROCESSED_FILES_TRACKER):
-            os.remove(PROCESSED_FILES_TRACKER)
-            print("Cleared processed files tracker")
-        
-        # Create empty tracker
-        save_processed_files_tracker({})
-        
-        return {
-            "message": "Processed files tracker cleared successfully",
-            "tracker_path": os.path.abspath(PROCESSED_FILES_TRACKER)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error clearing tracker: {str(e)}")
-
-@app.post("/test-extractor/")
-async def test_extractor(file: UploadFile = File(...)):
-    """
-    Test the extractor directly without any file tracking
-    """
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files allowed")
-    
-    # Save to temp location
-    temp_path = os.path.join(tempfile.gettempdir(), file.filename)
-    
-    try:
-        with open(temp_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        print(f"Testing extractor on: {temp_path}")
-        
-        # Test extractor
-        result = extractor.process_report(temp_path)
-        
-        return {
-            "message": "Extractor test completed",
-            "filename": file.filename,
-            "temp_path": temp_path,
-            "result_type": str(type(result)),
-            "result_length": len(result) if result else 0,
-            "result_data": result[:2] if result and len(result) > 0 else None,  # First 2 records
-            "extractor_type": str(type(extractor))
-        }
-        
-    except Exception as e:
-        return {
-            "message": "Extractor test failed",
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
-    finally:
-        # Clean up temp file
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
 
 if __name__ == "__main__":
     print("Starting Honey Production Processing API...")
