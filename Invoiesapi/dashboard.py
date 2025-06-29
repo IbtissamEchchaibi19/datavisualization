@@ -1,9 +1,5 @@
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import os
-import random
 from datetime import datetime, timedelta
 import dash
 from dash import dcc, html, dash_table
@@ -12,9 +8,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Global variable to track data version
-data_version = 0
 
+# Global variable to track data version
+# Create the Dash app
+
+data_version = 0
 def increment_data_version():
     """Call this function when data is updated to trigger dashboard refresh"""
     global data_version
@@ -76,167 +74,425 @@ def load_invoice_data():
             'vat', 'profit', 'profit_margin', 'cost_price', 'days_to_payment'
         ])
 
-# Create the Dash app
-app = dash.Dash(__name__, title="Invoice Analytics Dashboard")
 
-# Define the layout
+app = dash.Dash(__name__, 
+                title="🍯 Honey Analytics Dashboard",
+                requests_pathname_prefix='/dash_app/')
+# Enhanced styling with honey theme
+honey_colors = {
+    'primary': '#D4A574',      # Golden honey
+    'secondary': '#F4E4BC',    # Light honey cream
+    'accent': '#8B4513',       # Dark honey/amber
+    'success': '#228B22',      # Forest green
+    'warning': '#FF8C00',      # Dark orange
+    'background': '#FFF8DC',   # Cornsilk
+    'card_bg': '#FFFEF7',      # Very light cream
+    'text_dark': '#2F2F2F',    # Dark gray
+    'text_light': '#666666'    # Medium gray
+}
+
+# Custom CSS styles
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #FFF8DC 0%, #F4E4BC 100%);
+                margin: 0;
+                padding: 0;
+                min-height: 100vh;
+            }
+            .card-hover {
+                transition: all 0.3s ease;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }
+            .card-hover:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+            }
+            .gradient-text {
+                background: linear-gradient(45deg, #D4A574, #8B4513);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
+
+# Define the enhanced layout
 app.layout = html.Div([
-    # Manual refresh button
+    # Header with refresh button
     html.Div([
-        html.Button(
-            '🔄 Refresh Dashboard', 
-            id='refresh-button',
-            style={
-                'backgroundColor': '#008CBA',
+        html.Div([
+            html.H1([
+                "🍯 ",
+                html.Span("Honey Business Analytics", className="gradient-text")
+            ], style={
+                'textAlign': 'center',
+                'color': honey_colors['accent'],
+                'marginBottom': '10px',
+                'fontSize': '2.5rem',
+                'fontWeight': '700'
+            }),
+            html.P("Sweet insights for your honey business", style={
+                'textAlign': 'center',
+                'color': honey_colors['text_light'],
+                'fontSize': '1.1rem',
+                'marginTop': '0'
+            })
+        ], style={'flex': '1'}),
+        
+        html.Div([
+            html.Button([
+                "🔄 ",
+                html.Span("Refresh Data")
+            ], id='refresh-button', style={
+                'background': f'linear-gradient(135deg, {honey_colors["primary"]} 0%, {honey_colors["accent"]} 100%)',
                 'color': 'white',
-                'padding': '10px 20px',
+                'padding': '12px 24px',
                 'border': 'none',
-                'borderRadius': '4px',
+                'borderRadius': '25px',
                 'cursor': 'pointer',
                 'fontSize': '16px',
-                'margin': '10px'
-            }
-        ),
-        html.Span(id='last-update-time', style={'marginLeft': '20px', 'fontWeight': 'bold', 'color': 'green'})
-    ], style={'textAlign': 'right', 'margin': '10px'}),
+                'fontWeight': '600',
+                'boxShadow': '0 4px 15px rgba(212, 165, 116, 0.3)',
+                'transition': 'all 0.3s ease',
+                'display': 'flex',
+                'alignItems': 'center',
+                'gap': '8px'
+            }),
+            html.Div(id='last-update-time', style={
+                'marginTop': '8px',
+                'fontSize': '0.9rem',
+                'color': honey_colors['success'],
+                'fontWeight': '500'
+            })
+        ], style={'textAlign': 'right'})
+    ], style={
+        'display': 'flex',
+        'justifyContent': 'space-between',
+        'alignItems': 'center',
+        'padding': '20px 40px',
+        'background': f'linear-gradient(135deg, {honey_colors["card_bg"]} 0%, {honey_colors["secondary"]} 100%)',
+        'borderRadius': '0 0 20px 20px',
+        'marginBottom': '30px',
+        'boxShadow': '0 4px 20px rgba(0,0,0,0.1)'
+    }),
     
     # Data store component to hold the current dataframe
     dcc.Store(id='data-store'),
-    
-    html.H1("Invoice Analytics Dashboard", style={'textAlign': 'center'}),
     
     # Status indicator
     html.Div([
         html.Div(id='status-indicator', style={
             'textAlign': 'center',
-            'padding': '10px',
-            'margin': '10px',
-            'borderRadius': '5px',
-            'backgroundColor': '#e8f5e8',
-            'border': '1px solid #4CAF50'
+            'padding': '15px',
+            'margin': '0 40px 30px 40px',
+            'borderRadius': '15px',
+            'background': f'linear-gradient(135deg, {honey_colors["success"]}15 0%, {honey_colors["success"]}25 100%)',
+            'border': f'2px solid {honey_colors["success"]}',
+            'fontSize': '1.1rem',
+            'fontWeight': '500',
+            'color': honey_colors['text_dark']
         })
     ]),
     
     # Date Range Filter
     html.Div([
-        html.H4("Filter by Date Range:"),
-        dcc.DatePickerRange(
-            id='date-range',
-            display_format='YYYY-MM-DD'
-        ),
-    ], style={'margin': '20px'}),
+        html.Div([
+            html.H3("📅 Filter by Date Range", style={
+                'color': honey_colors['accent'],
+                'marginBottom': '15px',
+                'fontSize': '1.3rem',
+                'fontWeight': '600'
+            }),
+            dcc.DatePickerRange(
+                id='date-range',
+                display_format='YYYY-MM-DD',
+                style={'marginTop': '10px'}
+            ),
+        ], style={
+            'background': honey_colors['card_bg'],
+            'padding': '20px',
+            'borderRadius': '15px',
+            'boxShadow': '0 4px 15px rgba(0,0,0,0.1)',
+            'border': f'1px solid {honey_colors["secondary"]}'
+        })
+    ], style={'margin': '0 40px 30px 40px'}),
     
     # KPI Cards
     html.Div([
         html.Div([
-            html.H3("Total Revenue"),
-            html.H2(id='total-revenue')
-        ], className='card', style={'border': '1px solid #ddd', 'padding': '20px', 'margin': '10px', 'borderRadius': '5px', 'textAlign': 'center'}),
+            html.Div("💰", style={'fontSize': '2.5rem', 'marginBottom': '10px'}),
+            html.H3("Total Revenue", style={'color': honey_colors['text_dark'], 'margin': '0', 'fontSize': '1.1rem'}),
+            html.H2(id='total-revenue', style={'color': honey_colors['accent'], 'margin': '10px 0 0 0', 'fontSize': '1.8rem', 'fontWeight': '700'})
+        ], className='card-hover', style={
+            'background': f'linear-gradient(135deg, {honey_colors["card_bg"]} 0%, {honey_colors["secondary"]} 100%)',
+            'border': f'2px solid {honey_colors["primary"]}',
+            'padding': '25px',
+            'borderRadius': '20px',
+            'textAlign': 'center',
+            'flex': '1',
+            'margin': '0 10px'
+        }),
+        
         html.Div([
-            html.H3("Invoices Count"),
-            html.H2(id='invoice-count')
-        ], className='card', style={'border': '1px solid #ddd', 'padding': '20px', 'margin': '10px', 'borderRadius': '5px', 'textAlign': 'center'}),
+            html.Div("📊", style={'fontSize': '2.5rem', 'marginBottom': '10px'}),
+            html.H3("Invoices Count", style={'color': honey_colors['text_dark'], 'margin': '0', 'fontSize': '1.1rem'}),
+            html.H2(id='invoice-count', style={'color': honey_colors['accent'], 'margin': '10px 0 0 0', 'fontSize': '1.8rem', 'fontWeight': '700'})
+        ], className='card-hover', style={
+            'background': f'linear-gradient(135deg, {honey_colors["card_bg"]} 0%, {honey_colors["secondary"]} 100%)',
+            'border': f'2px solid {honey_colors["warning"]}',
+            'padding': '25px',
+            'borderRadius': '20px',
+            'textAlign': 'center',
+            'flex': '1',
+            'margin': '0 10px'
+        }),
+        
         html.Div([
-            html.H3("Average Invoice Value"),
-            html.H2(id='avg-invoice')
-        ], className='card', style={'border': '1px solid #ddd', 'padding': '20px', 'margin': '10px', 'borderRadius': '5px', 'textAlign': 'center'}),
+            html.Div("📈", style={'fontSize': '2.5rem', 'marginBottom': '10px'}),
+            html.H3("Average Invoice", style={'color': honey_colors['text_dark'], 'margin': '0', 'fontSize': '1.1rem'}),
+            html.H2(id='avg-invoice', style={'color': honey_colors['accent'], 'margin': '10px 0 0 0', 'fontSize': '1.8rem', 'fontWeight': '700'})
+        ], className='card-hover', style={
+            'background': f'linear-gradient(135deg, {honey_colors["card_bg"]} 0%, {honey_colors["secondary"]} 100%)',
+            'border': f'2px solid {honey_colors["success"]}',
+            'padding': '25px',
+            'borderRadius': '20px',
+            'textAlign': 'center',
+            'flex': '1',
+            'margin': '0 10px'
+        }),
+        
         html.Div([
-            html.H3("Payment Rate"),
-            html.H2(id='payment-rate')
-        ], className='card', style={'border': '1px solid #ddd', 'padding': '20px', 'margin': '10px', 'borderRadius': '5px', 'textAlign': 'center'})
-    ], style={'display': 'flex', 'justifyContent': 'space-between', 'margin': '20px'}),
+            html.Div("✅", style={'fontSize': '2.5rem', 'marginBottom': '10px'}),
+            html.H3("Payment Rate", style={'color': honey_colors['text_dark'], 'margin': '0', 'fontSize': '1.1rem'}),
+            html.H2(id='payment-rate', style={'color': honey_colors['accent'], 'margin': '10px 0 0 0', 'fontSize': '1.8rem', 'fontWeight': '700'})
+        ], className='card-hover', style={
+            'background': f'linear-gradient(135deg, {honey_colors["card_bg"]} 0%, {honey_colors["secondary"]} 100%)',
+            'border': f'2px solid {honey_colors["accent"]}',
+            'padding': '25px',
+            'borderRadius': '20px',
+            'textAlign': 'center',
+            'flex': '1',
+            'margin': '0 10px'
+        })
+    ], style={'display': 'flex', 'margin': '0 40px 40px 40px'}),
     
     # Revenue Trends
     html.Div([
-        html.H2("Revenue Trends"),
-        dcc.Graph(id='revenue-trend-graph')
-    ]),
+        html.Div([
+            html.H2("📈 Revenue Trends", style={
+                'color': honey_colors['accent'],
+                'marginBottom': '20px',
+                'fontSize': '1.5rem',
+                'fontWeight': '600'
+            }),
+            dcc.Graph(id='revenue-trend-graph')
+        ], style={
+            'background': honey_colors['card_bg'],
+            'padding': '25px',
+            'borderRadius': '20px',
+            'boxShadow': '0 6px 20px rgba(0,0,0,0.1)',
+            'border': f'1px solid {honey_colors["secondary"]}'
+        })
+    ], style={'margin': '0 40px 30px 40px'}),
     
     # Product Performance
     html.Div([
         html.Div([
-            html.H2("Product Sales Distribution"),
-            dcc.Graph(id='product-distribution')
-        ], style={'width': '48%'}),
-        html.Div([
-            html.H2("Top Products by Revenue"),
-            dcc.Graph(id='product-revenue')
-        ], style={'width': '48%'})
-    ], style={'display': 'flex', 'justifyContent': 'space-between'}),
+            html.Div([
+                html.H2("🍯 Product Distribution", style={
+                    'color': honey_colors['accent'],
+                    'marginBottom': '20px',
+                    'fontSize': '1.4rem',
+                    'fontWeight': '600'
+                }),
+                dcc.Graph(id='product-distribution')
+            ], style={
+                'background': honey_colors['card_bg'],
+                'padding': '25px',
+                'borderRadius': '20px',
+                'boxShadow': '0 6px 20px rgba(0,0,0,0.1)',
+                'border': f'1px solid {honey_colors["secondary"]}',
+                'width': '48%'
+            }),
+            
+            html.Div([
+                html.H2("🏆 Top Products by Revenue", style={
+                    'color': honey_colors['accent'],
+                    'marginBottom': '20px',
+                    'fontSize': '1.4rem',
+                    'fontWeight': '600'
+                }),
+                dcc.Graph(id='product-revenue')
+            ], style={
+                'background': honey_colors['card_bg'],
+                'padding': '25px',
+                'borderRadius': '20px',
+                'boxShadow': '0 6px 20px rgba(0,0,0,0.1)',
+                'border': f'1px solid {honey_colors["secondary"]}',
+                'width': '48%'
+            })
+        ], style={'display': 'flex', 'justifyContent': 'space-between'})
+    ], style={'margin': '0 40px 30px 40px'}),
     
     # Customer Insights
     html.Div([
-        html.H2("Customer Insights"),
+        html.H2("👥 Customer Insights", style={
+            'color': honey_colors['accent'],
+            'marginBottom': '25px',
+            'fontSize': '1.6rem',
+            'fontWeight': '600',
+            'textAlign': 'center'
+        }),
         html.Div([
             html.Div([
-                html.H3("Revenue by Customer Location"),
+                html.H3("🗺️ Revenue by Location", style={
+                    'color': honey_colors['text_dark'],
+                    'marginBottom': '15px',
+                    'fontSize': '1.2rem',
+                    'fontWeight': '500'
+                }),
                 dcc.Graph(id='location-revenue')
-            ], style={'width': '48%'}),
+            ], style={
+                'background': honey_colors['card_bg'],
+                'padding': '20px',
+                'borderRadius': '15px',
+                'boxShadow': '0 4px 15px rgba(0,0,0,0.08)',
+                'border': f'1px solid {honey_colors["secondary"]}',
+                'width': '48%'
+            }),
+            
             html.Div([
-                html.H3("Revenue by Customer Type"),
+                html.H3("🏢 Revenue by Customer Type", style={
+                    'color': honey_colors['text_dark'],
+                    'marginBottom': '15px',
+                    'fontSize': '1.2rem',
+                    'fontWeight': '500'
+                }),
                 dcc.Graph(id='customer-type-revenue')
-            ], style={'width': '48%'})
+            ], style={
+                'background': honey_colors['card_bg'],
+                'padding': '20px',
+                'borderRadius': '15px',
+                'boxShadow': '0 4px 15px rgba(0,0,0,0.08)',
+                'border': f'1px solid {honey_colors["secondary"]}',
+                'width': '48%'
+            })
         ], style={'display': 'flex', 'justifyContent': 'space-between'})
-    ]),
+    ], style={'margin': '0 40px 30px 40px'}),
     
     # Financial Analysis
     html.Div([
-        html.H2("Financial Analysis"),
         html.Div([
-            html.H3("Profit Margin Analysis"),
+            html.H2("💹 Profit Analysis", style={
+                'color': honey_colors['accent'],
+                'marginBottom': '20px',
+                'fontSize': '1.5rem',
+                'fontWeight': '600'
+            }),
             dcc.Graph(id='profit-margin')
-        ])
-    ]),
+        ], style={
+            'background': honey_colors['card_bg'],
+            'padding': '25px',
+            'borderRadius': '20px',
+            'boxShadow': '0 6px 20px rgba(0,0,0,0.1)',
+            'border': f'1px solid {honey_colors["secondary"]}'
+        })
+    ], style={'margin': '0 40px 30px 40px'}),
     
     # Invoice Details Section with Toggle Button
     html.Div([
         html.Div([
-            html.H2("Invoice Details", style={'display': 'inline-block', 'marginRight': '20px'}),
-            html.Button(
-                'Show/Hide Details', 
-                id='toggle-table-button',
-                style={
-                    'backgroundColor': '#4CAF50',
+            html.Div([
+                html.H2("📄 Invoice Details", style={
+                    'color': honey_colors['accent'],
+                    'margin': '0',
+                    'fontSize': '1.5rem',
+                    'fontWeight': '600'
+                }),
+                html.Button([
+                    "👁️ ",
+                    html.Span("Show/Hide Details")
+                ], id='toggle-table-button', style={
+                    'background': f'linear-gradient(135deg, {honey_colors["success"]} 0%, #32CD32 100%)',
                     'color': 'white',
-                    'padding': '10px 15px',
+                    'padding': '10px 20px',
                     'border': 'none',
-                    'borderRadius': '4px',
+                    'borderRadius': '20px',
                     'cursor': 'pointer',
-                    'fontSize': '16px'
-                }
-            )
-        ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px'}),
-        
-        # Data Table (hidden by default)
-        html.Div([
-            dash_table.DataTable(
-                id='invoice-table',
-                columns=[
-                    {'name': 'Invoice ID', 'id': 'invoice_id'},
-                    {'name': 'Date', 'id': 'invoice_date_str'},
-                    {'name': 'Customer', 'id': 'customer_name'},
-                    {'name': 'Location', 'id': 'customer_location'},
-                    {'name': 'Product', 'id': 'product'},
-                    {'name': 'Quantity', 'id': 'qty'},
-                    {'name': 'Total', 'id': 'total_str'},
-                    {'name': 'Status', 'id': 'payment_status'}
-                ],
-                style_table={'overflowX': 'auto'},
-                style_cell={
-                    'textAlign': 'left',
-                    'padding': '10px'
-                },
-                style_header={
-                    'backgroundColor': 'rgb(230, 230, 230)',
-                    'fontWeight': 'bold'
-                },
-                page_size=10,
-                filter_action="native",
-                sort_action="native",
-            )
-        ], id='table-container', style={'display': 'none'})
-    ])
-])
+                    'fontSize': '14px',
+                    'fontWeight': '500',
+                    'boxShadow': '0 3px 10px rgba(34, 139, 34, 0.3)',
+                    'transition': 'all 0.3s ease',
+                    'display': 'flex',
+                    'alignItems': 'center',
+                    'gap': '6px'
+                })
+            ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center', 'marginBottom': '15px'}),
+            
+            # Data Table (hidden by default)
+            html.Div([
+                dash_table.DataTable(
+                    id='invoice-table',
+                    columns=[
+                        {'name': 'Invoice ID', 'id': 'invoice_id'},
+                        {'name': 'Date', 'id': 'invoice_date_str'},
+                        {'name': 'Customer', 'id': 'customer_name'},
+                        {'name': 'Location', 'id': 'customer_location'},
+                        {'name': 'Product', 'id': 'product'},
+                        {'name': 'Quantity', 'id': 'qty'},
+                        {'name': 'Total', 'id': 'total_str'},
+                        {'name': 'Status', 'id': 'payment_status'}
+                    ],
+                    style_table={'overflowX': 'auto'},
+                    style_cell={
+                        'textAlign': 'left',
+                        'padding': '12px',
+                        'fontFamily': 'Segoe UI, sans-serif',
+                        'fontSize': '14px'
+                    },
+                    style_header={
+                        'backgroundColor': honey_colors['primary'],
+                        'color': 'white',
+                        'fontWeight': '600',
+                        'border': 'none'
+                    },
+                    style_data={
+                        'backgroundColor': honey_colors['card_bg'],
+                        'border': f'1px solid {honey_colors["secondary"]}'
+                    },
+                    page_size=10,
+                    filter_action="native",
+                    sort_action="native",
+                )
+            ], id='table-container', style={'display': 'none'})
+        ], style={
+            'background': honey_colors['card_bg'],
+            'padding': '25px',
+            'borderRadius': '20px',
+            'boxShadow': '0 6px 20px rgba(0,0,0,0.1)',
+            'border': f'1px solid {honey_colors["secondary"]}'
+        })
+    ], style={'margin': '0 40px 40px 40px'})
+], style={'minHeight': '100vh', 'paddingBottom': '40px'})
 
 # Callback to load data on page load or manual refresh
 @app.callback(
@@ -256,13 +512,13 @@ def update_data_store(n_clicks):
     # Update timestamp
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # Status message
+    # Status message with honey theme
     if df.empty:
-        status_msg = "📊 No invoice data available. Upload some invoices to see analytics."
+        status_msg = "🍯 No honey sales data available yet. Upload some invoices to see your sweet analytics!"
     else:
-        status_msg = f"📈 Dashboard loaded! Showing {len(df)} records from {df['invoice_id'].nunique()} unique invoices."
+        status_msg = f"🐝 Dashboard loaded successfully! Showing {len(df)} records from {df['invoice_id'].nunique()} unique invoices."
     
-    return data_dict, f"Last Updated: {current_time}", status_msg
+    return data_dict, f"⏰ Last Updated: {current_time}", status_msg
 
 # Callback to update date range when data changes
 @app.callback(
@@ -316,10 +572,18 @@ def update_date_range(data):
     ]
 )
 def update_dashboard(data, start_date, end_date):
+    # Custom color palette for charts
+    honey_chart_colors = [honey_colors['primary'], honey_colors['accent'], honey_colors['warning'], 
+                         honey_colors['success'], '#CD853F', '#DAA520', '#B8860B', '#FFB347']
+    
     # Handle empty data
     if not data:
         empty_fig = px.scatter()
-        empty_fig.update_layout(title="No data available - Click refresh or upload invoices")
+        empty_fig.update_layout(
+            title="🍯 No data available - Click refresh or upload invoices",
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
         return ("AED 0.00", "0", "AED 0.00", "0.0%", empty_fig, empty_fig, 
                 empty_fig, empty_fig, empty_fig, empty_fig, [])
     
@@ -328,7 +592,11 @@ def update_dashboard(data, start_date, end_date):
     
     if df.empty:
         empty_fig = px.scatter()
-        empty_fig.update_layout(title="No data available - Click refresh or upload invoices")
+        empty_fig.update_layout(
+            title="🍯 No data available - Click refresh or upload invoices",
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
         return ("AED 0.00", "0", "AED 0.00", "0.0%", empty_fig, empty_fig, 
                 empty_fig, empty_fig, empty_fig, empty_fig, [])
     
@@ -352,7 +620,11 @@ def update_dashboard(data, start_date, end_date):
     # If filtering results in empty dataframe
     if filtered_df.empty:
         empty_fig = px.scatter()
-        empty_fig.update_layout(title="No data available for selected date range")
+        empty_fig.update_layout(
+            title="🍯 No data available for selected date range",
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
         return ("AED 0.00", "0", "AED 0.00", "0.0%", empty_fig, empty_fig, 
                 empty_fig, empty_fig, empty_fig, empty_fig, [])
     
@@ -369,7 +641,7 @@ def update_dashboard(data, start_date, end_date):
     total_amount = filtered_df['total'].sum()
     payment_rate = f"{(paid_amount / total_amount * 100) if total_amount > 0 else 0:.1f}%"
     
-    # Revenue Trend Graph
+    # Revenue Trend Graph with honey styling
     df_monthly = filtered_df.copy()
     df_monthly['month'] = df_monthly['invoice_date'].dt.strftime('%Y-%m')
     
@@ -391,18 +663,23 @@ def update_dashboard(data, start_date, end_date):
     revenue_trend.add_trace(go.Bar(
         x=monthly_revenue['month'],
         y=monthly_revenue['amount_excl_vat'],
-        name='Base Amount'
+        name='Base Amount',
+        marker_color=honey_colors['primary']
     ))
     revenue_trend.add_trace(go.Bar(
         x=monthly_revenue['month'],
         y=monthly_revenue['vat'],
-        name='VAT'
+        name='VAT',
+        marker_color=honey_colors['warning']
     ))
     revenue_trend.update_layout(
         barmode='stack',
         title='Monthly Revenue Trend',
         xaxis_title='Month',
         yaxis_title='Revenue (AED)',
+        plot_bgcolor=honey_colors['background'],
+        paper_bgcolor=honey_colors['card_bg'],
+        font=dict(color=honey_colors['text_dark']),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -412,18 +689,28 @@ def update_dashboard(data, start_date, end_date):
         )
     )
     
-    # Product Distribution
+    # Product Distribution with honey styling
     if 'product' in filtered_df.columns:
         product_dist = px.pie(
             filtered_df, 
             names='product', 
             values='qty',
-            title='Product Quantity Distribution'
+            title='Product Quantity Distribution',
+            color_discrete_sequence=honey_chart_colors
+        )
+        product_dist.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg'],
+            font=dict(color=honey_colors['text_dark'])
         )
     else:
         product_dist = px.pie(title='Product data not available')
+        product_dist.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
     
-    # Product Revenue
+    # Product Revenue with honey styling
     if 'product' in filtered_df.columns:
         product_revenue = filtered_df.groupby('product')['total'].sum().reset_index()
         product_revenue = product_revenue.sort_values('total', ascending=False)
@@ -432,12 +719,23 @@ def update_dashboard(data, start_date, end_date):
             product_revenue,
             x='product',
             y='total',
-            title='Revenue by Product'
+            title='Revenue by Product',
+            color='total',
+            color_continuous_scale=[[0, honey_colors['secondary']], [1, honey_colors['accent']]]
+        )
+        product_rev_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg'],
+            font=dict(color=honey_colors['text_dark'])
         )
     else:
         product_rev_fig = px.bar(title='Product revenue data not available')
+        product_rev_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
     
-    # Location Revenue
+    # Location Revenue with honey styling
     if 'customer_location' in filtered_df.columns:
         location_revenue = filtered_df.groupby('customer_location')['total'].sum().reset_index()
         location_revenue = location_revenue.sort_values('total', ascending=False)
@@ -446,12 +744,23 @@ def update_dashboard(data, start_date, end_date):
             location_revenue,
             x='customer_location',
             y='total',
-            title='Revenue by Location'
+            title='Revenue by Location',
+            color='total',
+            color_continuous_scale=[[0, honey_colors['secondary']], [1, honey_colors['primary']]]
+        )
+        location_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg'],
+            font=dict(color=honey_colors['text_dark'])
         )
     else:
         location_fig = px.bar(title='Location data not available')
+        location_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
     
-    # Customer Type Revenue
+    # Customer Type Revenue with honey styling
     if 'customer_type' in filtered_df.columns:
         type_revenue = filtered_df.groupby('customer_type')['total'].sum().reset_index()
         type_revenue = type_revenue.sort_values('total', ascending=False)
@@ -460,7 +769,13 @@ def update_dashboard(data, start_date, end_date):
             type_revenue,
             names='customer_type',
             values='total',
-            title='Revenue by Customer Type'
+            title='Revenue by Customer Type',
+            color_discrete_sequence=honey_chart_colors
+        )
+        type_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg'],
+            font=dict(color=honey_colors['text_dark'])
         )
     else:
         type_fig = px.pie(
@@ -469,8 +784,12 @@ def update_dashboard(data, start_date, end_date):
             values='value',
             title='Customer Type Data Not Available'
         )
+        type_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
     
-    # Profit Margin Analysis
+    # Profit Margin Analysis with honey styling
     if 'profit' in filtered_df.columns and 'amount_excl_vat' in filtered_df.columns:
         df_profit = filtered_df.copy()
         df_profit['month'] = df_profit['invoice_date'].dt.strftime('%Y-%m')
@@ -483,17 +802,22 @@ def update_dashboard(data, start_date, end_date):
         profit_fig = make_subplots(specs=[[{"secondary_y": True}]])
         
         profit_fig.add_trace(
-            go.Bar(x=profit_data['month'], y=profit_data['profit'], name="Profit"),
+            go.Bar(x=profit_data['month'], y=profit_data['profit'], name="Profit", 
+                   marker_color=honey_colors['success']),
             secondary_y=False
         )
         
         profit_fig.add_trace(
-            go.Scatter(x=profit_data['month'], y=profit_data['margin'], name="Margin %", line=dict(color='red')),
+            go.Scatter(x=profit_data['month'], y=profit_data['margin'], name="Margin %", 
+                      line=dict(color=honey_colors['accent'], width=3)),
             secondary_y=True
         )
         
         profit_fig.update_layout(
             title_text="Monthly Profit and Margin",
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg'],
+            font=dict(color=honey_colors['text_dark']),
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
@@ -507,6 +831,10 @@ def update_dashboard(data, start_date, end_date):
         profit_fig.update_yaxes(title_text="Margin (%)", secondary_y=True)
     else:
         profit_fig = px.scatter(title="Profit Data Not Available")
+        profit_fig.update_layout(
+            plot_bgcolor=honey_colors['background'],
+            paper_bgcolor=honey_colors['card_bg']
+        )
     
     # Data Table
     table_df = filtered_df.copy()
@@ -546,6 +874,3 @@ def toggle_table(n_clicks, current_style):
     else:
         return {'display': 'none'}
 
-# Run the app
-if __name__ == '__main__':
-    app.run(debug=True)

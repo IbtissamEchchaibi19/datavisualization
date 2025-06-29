@@ -4,15 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import shutil
-import tempfile
-from typing import List, Set, Optional, Union
+from typing import List, Optional, Union
 import pandas as pd
-from datetime import datetime
 import uvicorn
-import threading
-import time
 import json
 import hashlib
+from fastapi.middleware.wsgi import WSGIMiddleware
 
 # Import your existing classes
 from invoice_extractor import InvoiceExtractor
@@ -21,17 +18,13 @@ from dashboard import app as dash_app
 # Initialize FastAPI
 app = FastAPI(title="Invoice Processing API", version="1.0.0")
 
+# Mount the Dash app - this makes it accessible at /dash_app/
+app.mount("/dash_app", WSGIMiddleware(dash_app.server))
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000", 
-        "http://localhost:8050",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:8050"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -58,9 +51,6 @@ extractor = InvoiceExtractor()
 
 # Ensure directories exist
 os.makedirs(INVOICES_DIR, exist_ok=True)
-
-# Dash app will run on port 8050
-dash_thread = None
 
 def get_file_hash(file_path: str) -> str:
     """Generate a hash for a file to track if it's been processed"""
@@ -246,27 +236,10 @@ def initialize_csv_if_needed():
         except Exception as e:
             print(f"Error initializing CSV: {e}")
 
-def run_dash_app():
-    """Run Dash app in a separate thread"""
-    try:
-        dash_app.run(host='0.0.0.0', port=8050, debug=False)
-    except Exception as e:
-        print(f"Error running Dash app: {e}")
-
-def start_dash_app():
-    """Start Dash app in background thread"""
-    global dash_thread
-    if dash_thread is None or not dash_thread.is_alive():
-        dash_thread = threading.Thread(target=run_dash_app, daemon=True)
-        dash_thread.start()
-        time.sleep(2)
-        print("Dash app started on port 8050")
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application on startup"""
     print("Starting Invoice Processing API...")
-    start_dash_app()
     initialize_csv_if_needed()
 
 @app.get("/")
@@ -279,24 +252,15 @@ async def root():
             "process_directory": "/process-directory/",
             "delete_invoices": "/delete-invoices/",
             "get_data": "/data/",
-            "dashboard": "/dashboard/",
+            "dashboard": "/dash_app/",
             "health": "/health/"
         }
     }
 
 @app.get("/dashboard/")
-async def get_dashboard(request: Request):
-    """Get dashboard URL"""
-    start_dash_app()
-    
-    host = request.headers.get("host", "localhost:8000")
-    base_url = f"http://{host.split(':')[0]}:8050"
-    
-    return {
-        "dashboard_url": base_url,
-        "message": "Dashboard is running",
-        "iframe_endpoint": "/dashboard-iframe/"
-    }
+async def get_dashboard():
+    """Redirect directly to the dashboard"""
+    return RedirectResponse(url="")
 
 @app.delete("/delete-invoices/")
 async def delete_invoices(request: DeleteInvoiceRequest):
@@ -329,7 +293,7 @@ async def delete_invoices(request: DeleteInvoiceRequest):
         # Extract filenames from the found records and delete PDF files
         filenames_to_delete = []
         for record in found_records:
-            # Adjust this based on your CSV structure - might be 'filename', 'file_path', etc.
+            # Adjust this based on your CSV structure - might be 'filename', 'file_name', etc.
             filename = record.get('filename') or record.get('file_name') or record.get('source_file')
             if filename:
                 if not filename.endswith('.pdf'):
@@ -515,8 +479,6 @@ async def upload_invoices(files: Union[List[UploadFile], UploadFile] = File(...)
 async def health_check():
     """Health check endpoint"""
     try:
-        dashboard_status = "running" if dash_thread and dash_thread.is_alive() else "stopped"
-        
         # Get processing status
         pdf_count = 0
         processed_count = 0
@@ -549,7 +511,7 @@ async def health_check():
         return {
             "status": "healthy",
             "message": "Invoice Processing API is running",
-            "dashboard_status": dashboard_status,
+            "dashboard_status": "mounted at /dash_app/",
             "csv_exists": os.path.exists(CSV_FILE),
             "csv_records": csv_records,
             "invoices_directory_exists": os.path.exists(INVOICES_DIR),
@@ -567,5 +529,5 @@ if __name__ == "__main__":
     print("Starting Invoice Processing API...")
     print("API will be available at: http://localhost:8000")
     print("API Documentation: http://localhost:8000/docs")
-    print("Dashboard will be available at: http://localhost:8050")
+    print("Dashboard will be available at: http://localhost:8000/dash_app/")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

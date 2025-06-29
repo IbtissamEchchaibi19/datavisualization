@@ -9,6 +9,48 @@ from datetime import datetime, timedelta
 # Initialize the Dash app
 app = dash.Dash(__name__)
 app.title = "Beehive Analytics Dashboard"
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            .card {
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 20px;
+                margin: 10px;
+                text-align: center;
+                background-color: #f9f9f9;
+                min-width: 200px;
+            }
+            .card h3 {
+                margin: 0 0 10px 0;
+                color: #666;
+            }
+            .card h2 {
+                margin: 0;
+                color: #333;
+            }
+            /* Prevent plotly graphs from auto-resizing */
+            .js-plotly-plot {
+                width: 100% !important;
+                height: 400px !important;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>'''
 
 # Generate comprehensive mock data for beehive monitoring
 def generate_beehive_data():

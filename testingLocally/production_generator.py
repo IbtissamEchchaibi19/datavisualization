@@ -14,11 +14,11 @@ def generate_random_date():
     return random_date.strftime("%d/%m/%y")
 
 def generate_batch_number():
-    prefixes = ["BTH", "HNY", "API", "SDR", "MNH", "PRD"]
+    prefixes = ["ibtissam","hanane","BTH", "HNY", "API", "SDR", "MNH", "PRD"]
     return f"{random.choice(prefixes)}{random.randint(1000, 9999)}"
 
 def generate_apiary_data():
-    locations = ["Fujairah", "Dubai", "Sharjah", "Abu Dhabi", "Ajman", "Ras Al Khaimah", "Umm Al Quwain",
+    locations = ["casablanca","taza","Fujairah", "Dubai", "Sharjah", "Abu Dhabi", "Ajman", "Ras Al Khaimah", "Umm Al Quwain",
                  "Masafi", "Dibba", "Taweeh", "Al Hajar", "Khor Fakkan", "Kalba", "Hatta", "Al farfar"]
     
     apiary_number = f"{random.randint(1, 99):02d}"
@@ -170,8 +170,8 @@ def create_honey_production_pdf(filename, batch_number):
     doc.build(story)
     print(f"Generated: {filename} (Batch: {batch_number})")
 
-def generate_multiple_pdfs(num_files=100):
-    output_dir = "honey_production_reports"
+def generate_multiple_pdfs(num_files=10):
+    output_dir = "honey_production"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -189,7 +189,7 @@ if __name__ == "__main__":
         batch_num = generate_batch_number()
         test_filename = f"test_honey_report_{batch_num}.pdf"
         create_honey_production_pdf(test_filename, batch_num)
-        generate_multiple_pdfs(100)
+        generate_multiple_pdfs(10)
         
     except ImportError:
         print("Please install reportlab: pip install reportlab")

@@ -50,9 +50,9 @@ table_heading = ParagraphStyle(
 def generate_invoice_data():
     # Product variations
     products = [
-        'Sidr Honey 50g', 'Acacia Honey 50g', 'Wildflower Honey 50g',
-        'Mountain Honey 550g', 'Forest Honey 50g', 'Royal Jelly Honey 50g',
-        'Manuka Honey 50g', 'Clover Honey 50g'
+        'Sidr Honey 70g', 'Acacia Honey 70g', 'Wildflower Honey 70g',
+        'Mountain Honey 770g', 'Forest Honey 770g', 'Royal Jelly Honey 70g',
+        'Manuka Honey 70g', 'Clover Honey 70g'
     ]
 
     # Customer locations (Emirates)
